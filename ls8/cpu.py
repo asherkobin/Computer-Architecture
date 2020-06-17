@@ -5,47 +5,59 @@ import sys
 """ Implments single-byte addressable guarded memory """
 class Memory():
   def __init__(self, size):
-    self.internal_memory = [0] * size
     self.size = size
+    self.clear()
+
+  def clear(self):
+    self.internal_memory = [0] * self.size
 
   def read_byte(self, address):
     if address < 0 or address > self.size - 1:
-      raise ReferenceError("Out of bounds memory reference.")
+      raise ReferenceError("Out of bounds memory reference")
     return self.internal_memory[address]
 
   def write_byte(self, address, data):
     if address < 0 or address > self.size - 1:
-      raise ReferenceError("Out of bounds memory reference.")
+      raise ReferenceError("Out of bounds memory reference")
     try:
       real_byte = int(data)
-      if real_byte < 0 or real_byte > 255:
-        raise Exception()
+      if real_byte > 0xFF:
+        raise TypeError("Integer overflow")
+      if real_byte < 0:
+        raise TypeError("Integer underflow")
       self.internal_memory[address] = real_byte
-    except:
-      raise TypeError("Data must be a number from 0-255.")
+    except TypeError:
+      raise TypeError("Data must be an 8-bit number")
 
 """ Virtual CPU """
 class CPU:
   def __init__(self):
     # spec limits memory to 256 bytes
     self.ram = Memory(256)
+
+    # trace will print the history up to 5 lines
+    self.trace_history = []
     
-    # this table maps an instruction number to its implementation
-    self.instruction_set = {
-      0x01: self.HLT,
-      0x47: self.PRN,
-      0x82: self.LDI,
+    # supported instructions
+    HLT = 0x01
+    PRN = 0x47
+    LDI = 0x82
+    MUL = 0xA2
+    
+    # this table maps an instruction to its implementation
+    self.dispatch_table = {
+      HLT: self.HLT,
+      PRN: self.PRN,
+      LDI: self.LDI,
+    }
+
+    # instructions implemented by the ALU
+    self.alu_table = {
+      MUL: "MUL"
     }
     
     # general purpose registers
-    self.R0 = 0
-    self.R1 = 0
-    self.R2 = 0
-    self.R3 = 0
-    self.R4 = 0
-    self.R5 = 0
-    self.R6 = 0
-    self.R7 = 0
+    self.gp_registers = Memory(8)
 
     # special purpose registers
     self.PC = 0 # program counter (aka instruction pointer)
@@ -54,107 +66,110 @@ class CPU:
     # flags register (each bit is a flag, up to 8)
     self.FLAGS = 0x00
 
-    # list of flags with their position within the FLAGS register
+    # list of flag masks indicating their position within the FLAGS register
     self.FLAG_RUNNING = 0x01 # then 2, 4, 8, ... F0
 
-  def load(self):
-    """Load a program into memory."""
-
+  def load(self, ls8_file):
+    self.ram.clear()
     address = 0
 
-    # For now, we've just hardcoded a program:
+    with open(ls8_file) as f:
+      for line in f:
+        line = line.split("#")
 
-    program = [
-      # From print8.ls8
-      0b10000010, # LDI R0,8
-      0b00000000,
-      0b00001000,
-      0b01000111, # PRN R0
-      0b00000000,
-      0b00000001, # HLT
-    ]
+        try:
+          data = int(line[0], 2)
+        except ValueError:
+          continue
 
-    for instruction in program:
-      self.ram.write_byte(address, instruction)
-      address += 1
+        self.ram_write(address, data)
+        address += 1
+
+  def ram_read(self, address):
+    return self.ram.read_byte(address)
+
+  def ram_write(self, address, value):
+    self.ram.write_byte(address, value)
 
   def alu(self, op, reg_a, reg_b):
-    pass
-      # """ALU operations."""
-
-      # if op == "ADD":
-      #     self.reg[reg_a] += self.reg[reg_b]
-      # #elif op == "SUB": etc
-      # else:
-      #     raise Exception("Unsupported ALU operation")
+    if op not in self.alu_table:
+      raise Exception("Unsupported ALU operation")
+    
+    if self.alu_table[op] == "MUL":
+      reg_a_val = self.gp_registers.read_byte(reg_a)
+      reg_b_val = self.gp_registers.read_byte(reg_b)
+      result = reg_a_val * reg_b_val
+      
+      self.gp_registers.write_byte(reg_a, result)
 
   def trace(self):
-    """
-    Handy function to print out the CPU state. You might want to call this
-    from run() if you need help debugging.
-    """
-    pass
+    # header
+    print(f"PC | IN P1 P2 |", end='')
 
-    # print(f"TRACE: %02X | %02X %02X %02X |" % (
-    #   self.pc,
-    #   #self.fl,
-    #   #self.ie,
-    #   self.ram_read(self.pc),
-    #   self.ram_read(self.pc + 1),
-    #   self.ram_read(self.pc + 2)), end='')
+    for i in range(8):
+      print(" R%X" % i, end='')
 
-    # for i in range(8):
-    #     print(" %02X" % self.reg[i], end='')
+    # print(f" | FLAGS: LGE")
+    print()
 
-    # print()
+    # splitter
+    print("-----------------------------------------")
+
+    # cpu state
+    trace_info = f"%02X | %02X %02X %02X |" % (
+      self.PC,
+      self.ram_read(self.PC),
+      self.ram_read(self.PC + 1),
+      self.ram_read(self.PC + 2))
+
+    for i in range(8):
+      trace_info += " %02X" % self.gp_registers.read_byte(i)
+
+    self.trace_history.append(trace_info)
+
+    last_5_traces = self.trace_history[-5:]
+
+    for line in last_5_traces:
+      print(line, end='')
+      print()
 
   def run(self):
     self.FLAGS |= self.FLAG_RUNNING # CPU ON
     
     while self.FLAGS & self.FLAG_RUNNING == True: # while CPU ON
-      self.IR = self.ram.read_byte(self.PC) # load instruction
+      self.IR = self.ram_read(self.PC) # load instruction
+      self.trace()
+      
+      # decode the instruction
 
-      try:
-        self.instruction_set[self.IR]() # execute
-      except IndexError:
-        print(f"Unknown instruction {self.IR} at address {self.PC}")
+      num_ops = (self.IR & 0b11000000) >> 6
+      use_alu = (self.IR & 0b00100000) >> 5
+      sets_pc = (self.IR & 0b00010000) >> 4
+      insr_id = (self.IR & 0b00001111) >> 0
+
+      if use_alu:
+        self.alu(self.IR, self.ram_read(self.PC + 1), self.ram_read(self.PC + 2))
+      else:
+        try:
+          self.dispatch_table[self.IR]() # execute
+        except KeyError:
+          print(f"Unknown instruction 0x%02X at address 0x%02X" % (self.IR, self.PC))
+          self.HLT()
+
+      if not sets_pc:
+        self.PC += (1 + num_ops)
 
   # Implementation of CPU Instructions
 
   def HLT(self):
     self.FLAGS &= ~self.FLAG_RUNNING
-    self.PC += 1
 
   def LDI(self):
-    reg_num = self.PC + 1
-    reg_val = self.PC + 2
-    self.set_gp_register(reg_num, reg_val)
-    self.PC += 3
+    reg_num = self.ram_read(self.PC + 1)
+    reg_val = self.ram_read(self.PC + 2)
+    self.gp_registers.write_byte(reg_num, reg_val)
 
   def PRN(self):
-    print(self.PC + 1)
-    self.PC += 2
-
-  # Helpers
-
-  def set_gp_register(self, reg_num, reg_val):
-    if reg_num < 0 or reg_num > 7:
-      raise Exception(f"Illegal Register R{reg_num}")
-
-    if reg_num == 0:
-      self.R0 = reg_val
-    elif reg_num == 1:
-      self.R1 = reg_val
-    elif reg_num == 2:
-      self.R2 = reg_val
-    elif reg_num == 3:
-      self.R3 = reg_val
-    elif reg_num == 4:
-      self.R4 = reg_val
-    elif reg_num == 5:
-      self.R5 = reg_val
-    elif reg_num == 6:
-      self.R6 = reg_val
-    elif reg_num == 7:
-      self.R7 = reg_val
-    
+    reg_num = self.ram_read(self.PC + 1)
+    reg_val = self.gp_registers.read_byte(reg_num)
+    print(reg_val)
