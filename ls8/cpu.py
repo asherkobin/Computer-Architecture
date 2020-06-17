@@ -138,7 +138,7 @@ class CPU:
     
     while self.FLAGS & self.FLAG_RUNNING == True: # while CPU ON
       self.IR = self.ram_read(self.PC) # load instruction
-      self.trace()
+      #self.trace()
       
       # decode the instruction
 
