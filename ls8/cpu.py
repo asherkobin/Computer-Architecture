@@ -39,16 +39,20 @@ class CPU:
     self.trace_history = []
     
     # supported instructions
-    HLT = 0x01
-    PRN = 0x47
-    LDI = 0x82
-    MUL = 0xA2
-    
+    HLT  = 0x01
+    PRN  = 0x47
+    LDI  = 0x82
+    MUL  = 0xA2
+    PUSH = 0x45
+    POP  = 0x46
+
     # this table maps an instruction to its implementation
     self.dispatch_table = {
-      HLT: self.HLT,
-      PRN: self.PRN,
-      LDI: self.LDI,
+      HLT:  self.HLT,
+      PRN:  self.PRN,
+      LDI:  self.LDI,
+      PUSH: self.PUSH,
+      POP:  self.POP
     }
 
     # instructions implemented by the ALU
@@ -58,6 +62,7 @@ class CPU:
     
     # general purpose registers
     self.gp_registers = Memory(8)
+    self.gp_registers.write_byte(7, 0xF4) # R7 = SP
 
     # special purpose registers
     self.PC = 0 # program counter (aka instruction pointer)
@@ -68,6 +73,12 @@ class CPU:
 
     # list of flag masks indicating their position within the FLAGS register
     self.FLAG_RUNNING = 0x01 # then 2, 4, 8, ... F0
+
+  def get_SP(self):
+    return self.gp_registers.read_byte(7)
+
+  def set_SP(self, value):
+    self.gp_registers.write_byte(7, value)
 
   def load(self, ls8_file):
     self.ram.clear()
@@ -173,3 +184,15 @@ class CPU:
     reg_num = self.ram_read(self.PC + 1)
     reg_val = self.gp_registers.read_byte(reg_num)
     print(reg_val)
+
+  def PUSH(self):
+    self.set_SP(self.get_SP() - 1)
+    reg_num = self.ram_read(self.PC + 1)
+    data = self.gp_registers.read_byte(reg_num)
+    self.ram_write(self.get_SP(), data)
+
+  def POP(self):
+    reg_num = self.ram_read(self.PC + 1)
+    data = self.ram_read(self.get_SP())
+    self.gp_registers.write_byte(reg_num, data)
+    self.set_SP(self.get_SP() + 1)
