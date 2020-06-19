@@ -41,16 +41,18 @@ class CPU:
     
     # supported instructions
     HLT  = 0x01
+    RET  = 0x11
     PUSH = 0x45
     POP  = 0x46
     PRN  = 0x47
+    CALL = 0x50
     JMP  = 0x54
     JEQ  = 0x55
     JNE  = 0x56
     LDI  = 0x82
+    ADD  = 0xA0
     MUL  = 0xA2
     CMP  = 0xA7
-    
     AND  = 0xA8
     OR   = 0xAA
     XOR  = 0xAB
@@ -77,7 +79,10 @@ class CPU:
       NOT:  self.NOT,
       SHL:  self.SHL,
       SHR:  self.SHR,
-      MOD:  self.MOD
+      MOD:  self.MOD,
+      CALL: self.CALL,
+      RET:  self.RET,
+      ADD:  self.ADD
     }
 
     # general purpose registers
@@ -166,7 +171,7 @@ class CPU:
     while self.FL & self.FLAG_RUNNING == self.FLAG_RUNNING: # while CPU ON
       self.IR = self.ram_read(self.PC) # load instruction
       
-      self.trace()
+      # self.trace()
       
       # decode the instruction
 
@@ -239,8 +244,29 @@ class CPU:
     else:
       self.PC += 2
 
+  def CALL(self):
+    # The address of the ***instruction*** _directly after_ `CALL` is pushed onto the stack.
+    self.ram_write(self.get_SP(), self.PC + 2)
+    self.set_SP(self.get_SP() - 1)
+    # The PC is set to the address stored in the given register.
+    reg_num = self.ram_read(self.PC + 1)
+    self.PC = self.gp_registers.read_byte(reg_num)
+
+  def RET(self):
+    # Pop the value from the top of the stack and store it in the `PC`.
+    self.set_SP(self.get_SP() + 1)
+    return_adress = self.ram_read(self.get_SP())
+    self.PC = return_adress
+
+
 # ALU instructions take up to two operands stored in registers
   
+  def ADD(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+    result = reg_a_val + reg_b_val
+    self.gp_registers.write_byte(reg_a, result)
+
   def MUL(self, reg_a, reg_b):
     reg_a_val = self.gp_registers.read_byte(reg_a)
     reg_b_val = self.gp_registers.read_byte(reg_b)
