@@ -33,33 +33,53 @@ class Memory():
 class CPU:
   def __init__(self):
     # spec limits memory to 256 bytes
-    self.ram = Memory(256)
+    self.MAX_MEM = 256
+    self.ram = Memory(self.MAX_MEM)
 
     # trace will print the history up to 5 lines
     self.trace_history = []
     
     # supported instructions
     HLT  = 0x01
-    PRN  = 0x47
-    LDI  = 0x82
-    MUL  = 0xA2
     PUSH = 0x45
     POP  = 0x46
-
+    PRN  = 0x47
+    JMP  = 0x54
+    JEQ  = 0x55
+    JNE  = 0x56
+    LDI  = 0x82
+    MUL  = 0xA2
+    CMP  = 0xA7
+    
+    AND  = 0xA8
+    OR   = 0xAA
+    XOR  = 0xAB
+    NOT  = 0x69
+    SHL  = 0xAC
+    SHR  = 0xAD
+    MOD  = 0xA4
+  
     # this table maps an instruction to its implementation
     self.dispatch_table = {
       HLT:  self.HLT,
       PRN:  self.PRN,
       LDI:  self.LDI,
       PUSH: self.PUSH,
-      POP:  self.POP
+      POP:  self.POP,
+      MUL:  self.MUL,
+      CMP:  self.CMP,
+      JMP:  self.JMP,
+      JEQ:  self.JEQ,
+      JNE:  self.JNE,
+      AND:  self.AND,
+      OR:   self.OR,
+      XOR:  self.XOR,
+      NOT:  self.NOT,
+      SHL:  self.SHL,
+      SHR:  self.SHR,
+      MOD:  self.MOD
     }
 
-    # instructions implemented by the ALU
-    self.alu_table = {
-      MUL: "MUL"
-    }
-    
     # general purpose registers
     self.gp_registers = Memory(8)
     self.gp_registers.write_byte(7, 0xF4) # R7 = SP
@@ -69,10 +89,13 @@ class CPU:
     self.IR = 0 # instruction register (the currently executing instruction)
 
     # flags register (each bit is a flag, up to 8)
-    self.FLAGS = 0x00
+    self.FL = 0x00
 
     # list of flag masks indicating their position within the FLAGS register
-    self.FLAG_RUNNING = 0x01 # then 2, 4, 8, ... F0
+    self.FLAG_RUNNING = 0b10000000
+    self.FLAG_LESS    = 0b00000100
+    self.FLAG_GREATER = 0b00000010
+    self.FLAG_EQUAL   = 0b00000001
 
   def get_SP(self):
     return self.gp_registers.read_byte(7)
@@ -102,29 +125,18 @@ class CPU:
   def ram_write(self, address, value):
     self.ram.write_byte(address, value)
 
-  def alu(self, op, reg_a, reg_b):
-    if op not in self.alu_table:
-      raise Exception("Unsupported ALU operation")
-    
-    if self.alu_table[op] == "MUL":
-      reg_a_val = self.gp_registers.read_byte(reg_a)
-      reg_b_val = self.gp_registers.read_byte(reg_b)
-      result = reg_a_val * reg_b_val
-      
-      self.gp_registers.write_byte(reg_a, result)
-
   def trace(self):
     # header
-    print(f"PC | IN P1 P2 |", end='')
+    print("PC | IN P1 P2 |", end='')
 
     for i in range(8):
       print(" R%X" % i, end='')
 
-    # print(f" | FLAGS: LGE")
+    print(" | FL", end='')
     print()
 
     # splitter
-    print("-----------------------------------------")
+    print("--------------------------------------------------")
 
     # cpu state
     trace_info = f"%02X | %02X %02X %02X |" % (
@@ -136,6 +148,8 @@ class CPU:
     for i in range(8):
       trace_info += " %02X" % self.gp_registers.read_byte(i)
 
+    trace_info += " | " + "{0:b}".format(self.FL)
+
     self.trace_history.append(trace_info)
 
     last_5_traces = self.trace_history[-5:]
@@ -144,12 +158,15 @@ class CPU:
       print(line, end='')
       print()
 
+    print()
+
   def run(self):
-    self.FLAGS |= self.FLAG_RUNNING # CPU ON
+    self.FL |= self.FLAG_RUNNING # CPU ON
     
-    while self.FLAGS & self.FLAG_RUNNING == True: # while CPU ON
+    while self.FL & self.FLAG_RUNNING == self.FLAG_RUNNING: # while CPU ON
       self.IR = self.ram_read(self.PC) # load instruction
-      #self.trace()
+      
+      self.trace()
       
       # decode the instruction
 
@@ -170,10 +187,19 @@ class CPU:
       if not sets_pc:
         self.PC += (1 + num_ops)
 
+  # Implementation of ALU
+  
+  def alu(self, op, reg_a, reg_b):
+    try:
+      self.dispatch_table[self.IR](reg_a, reg_b) # execute
+    except KeyError:
+      print(f"Unknown ALU instruction 0x%02X at address 0x%02X" % (self.IR, self.PC))
+      self.HLT()
+
   # Implementation of CPU Instructions
 
   def HLT(self):
-    self.FLAGS &= ~self.FLAG_RUNNING
+    self.FL &= ~self.FLAG_RUNNING
 
   def LDI(self):
     reg_num = self.ram_read(self.PC + 1)
@@ -196,3 +222,87 @@ class CPU:
     data = self.ram_read(self.get_SP())
     self.gp_registers.write_byte(reg_num, data)
     self.set_SP(self.get_SP() + 1)
+
+  def JMP(self):
+    reg_num = self.ram_read(self.PC + 1)
+    self.PC = self.gp_registers.read_byte(reg_num)
+
+  def JEQ(self):
+    if self.FL & self.FLAG_EQUAL == self.FLAG_EQUAL:
+      self.JMP()
+    else:
+      self.PC += 2
+
+  def JNE(self):
+    if self.FL & self.FLAG_EQUAL == 0:
+      self.JMP()
+    else:
+      self.PC += 2
+
+# ALU instructions take up to two operands stored in registers
+  
+  def MUL(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+    result = reg_a_val * reg_b_val
+    self.gp_registers.write_byte(reg_a, result)
+  
+  def CMP(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+
+    if reg_a_val == reg_b_val:
+      self.FL |= self.FLAG_EQUAL   # set FLAG_EQUAL ON
+    else:
+      self.FL &= ~self.FLAG_EQUAL  # set FLAG_EQUAL OFF
+    
+    if reg_a_val < reg_b_val:
+      self.FL |= self.FLAG_LESS
+    else:
+      self.FL &= ~self.FLAG_LESS
+    
+    if reg_a_val > reg_b_val:
+      self.FL |= self.FLAG_GREATER
+    else:
+      self.FL &= ~self.FLAG_GREATER
+
+  def AND(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+    result = reg_a_val & reg_b_val
+    self.gp_registers.write_byte(reg_a, result)
+
+  def OR(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+    result = reg_a_val | reg_b_val
+    self.gp_registers.write_byte(reg_a, result)
+
+  def XOR(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+    result = reg_a_val ^ reg_b_val
+    self.gp_registers.write_byte(reg_a, result)
+
+  def NOT(self, reg_a, _):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    result = ~reg_a_val
+    self.gp_registers.write_byte(reg_a, result)
+
+  def SHL(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+    result = reg_a_val << reg_b_val
+    self.gp_registers.write_byte(reg_a, result)
+
+  def SHR(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+    result = reg_a_val >> reg_b_val
+    self.gp_registers.write_byte(reg_a, result)
+
+  def MOD(self, reg_a, reg_b):
+    reg_a_val = self.gp_registers.read_byte(reg_a)
+    reg_b_val = self.gp_registers.read_byte(reg_b)
+    result = reg_a_val % reg_b_val
+    self.gp_registers.write_byte(reg_a, result)
